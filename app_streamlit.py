@@ -112,11 +112,58 @@ def qwen3_tts(text, save_path):
         raise Exception(f"TTS API错误: {resp.status_code}, {resp.text}")
 
     result = resp.json()
-    audio_url = result['output']['audio']['url']
 
-    audio_resp = requests.get(audio_url, timeout=60)
+    # 兼容返回格式：可能是直接返回音频 URL，也可能返回 base64 数据
+    audio_bytes = None
+
+    # 处理 output.audio.url
+    try:
+        audio_info = result.get('output', {}).get('audio', {})
+    except Exception:
+        audio_info = {}
+
+    # 优先处理 base64 data 字段
+    audio_data_b64 = audio_info.get('data') or audio_info.get('b64') or audio_info.get('base64')
+    if audio_data_b64:
+        import base64
+        try:
+            audio_bytes = base64.b64decode(audio_data_b64)
+        except Exception as e:
+            raise Exception(f"无法解析 TTS 返回的 base64 音频数据: {e}")
+
+    # 否则如果有 URL，则去请求该 URL
+    if audio_bytes is None:
+        audio_url = audio_info.get('url')
+        if not audio_url:
+            # 有些返回把 audio 放在不同层级，尝试直接查找
+            if isinstance(result.get('output'), dict):
+                for v in result['output'].values():
+                    if isinstance(v, dict) and ('url' in v or 'data' in v):
+                        audio_url = v.get('url')
+                        audio_data_b64 = audio_data_b64 or v.get('data')
+                        break
+
+        if audio_data_b64 and audio_bytes is None:
+            import base64
+            try:
+                audio_bytes = base64.b64decode(audio_data_b64)
+            except Exception as e:
+                raise Exception(f"无法解析 TTS 返回的 base64 音频数据: {e}")
+
+        if audio_bytes is None and audio_url:
+            audio_resp = requests.get(audio_url, timeout=60)
+            if audio_resp.status_code != 200:
+                raise Exception(f"无法下载音频文件: {audio_resp.status_code}, {audio_resp.text}")
+            audio_bytes = audio_resp.content
+
+    if not audio_bytes:
+        raise Exception("TTS 未返回可用的音频数据")
+
+    # 写入文件（API 返回的是 WAV 格式）
     with open(save_path, "wb") as f:
-        f.write(audio_resp.content)
+        f.write(audio_bytes)
+    
+    print(f"[调试] 音频文件已保存: {save_path}, 大小: {len(audio_bytes)} 字节")
 
 # ================== Word文档生成函数 ==================
 def add_pinyin_to_word(doc, text, red_words):
@@ -416,7 +463,8 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
                                         
                                         # 缓存 MP3 数据
                                         st.session_state.mp3_cache[mp3_key] = mp3_data
-                                        
+
+                                        # 清理进度占位符并刷新界面以显示音频播放器和下载按钮
                                         progress_placeholder.empty()
                                         st.rerun()
                                         
@@ -424,19 +472,20 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
                                         st.error(f"❌ MP3 生成失败：{str(e)}")
                                         st.info("可能原因：API 密钥无效、网络连接问题或 API 服务不可用")
                         
-                        # 显示已缓存的 MP3
+                        # 显示已缓存的 MP3/WAV
                         if mp3_key in st.session_state.mp3_cache:
-                            mp3_data = st.session_state.mp3_cache[mp3_key]
+                            audio_data = st.session_state.mp3_cache[mp3_key]
                             
-                            st.audio(mp3_data, format='audio/mp3')
+                            # Streamlit 的 audio 组件支持多种格式
+                            st.audio(audio_data, format='audio/wav')
                             
                             col_mp3_down = st.columns([1])[0]
                             with col_mp3_down:
                                 st.download_button(
-                                    label=f"📥 下载 MP3 {i}",
-                                    data=mp3_data,
-                                    file_name=f"HSK{level}_第{i}篇_墨讲师朗读.mp3",
-                                    mime="audio/mp3",
+                                    label=f"📥 下载音频 {i}",
+                                    data=audio_data,
+                                    file_name=f"HSK{level}_第{i}篇_墨讲师朗读.wav",
+                                    mime="audio/wav",
                                     key=f"btn_mp3_{i}",
                                     use_container_width=True
                                 )
