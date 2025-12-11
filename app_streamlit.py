@@ -335,7 +335,7 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
                     if include_pinyin:
                         st.markdown("**带拼音版本：**")
                         html_content = add_pinyin_to_text(article, words)
-                        st.html(html_content)
+                        st.markdown(html_content, unsafe_allow_html=True)
                     
                     # 下载和音频选项
                     col1, col2, col3 = st.columns(3)
