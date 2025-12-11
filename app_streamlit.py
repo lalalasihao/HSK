@@ -35,6 +35,8 @@ if 'generated_articles' not in st.session_state:
     st.session_state.generated_articles = []
 if 'mp3_cache' not in st.session_state:
     st.session_state.mp3_cache = {}
+if 'word_cache' not in st.session_state:
+    st.session_state.word_cache = {}
 
 # HSK标准信息
 HSK_INFO = {
@@ -350,21 +352,31 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
                     st.markdown("**原文：**")
                     st.info(article)
                     
-                    # 创建 Word 文档
-                    doc = Document()
-                    doc.add_heading(f"HSK{level} 第 {i} 篇", level=1)
-                    doc.add_paragraph()
-                    add_pinyin_to_word(doc, article, words)
+                    # Word 文档缓存 key
+                    word_key = f"word_{level}_{i}"
                     
-                    # 转换为字节
-                    word_bytes = io.BytesIO()
-                    doc.save(word_bytes)
-                    word_bytes.seek(0)
+                    # 如果缓存中没有 Word 文档，则生成
+                    if word_key not in st.session_state.word_cache:
+                        doc = Document()
+                        doc.add_heading(f"HSK{level} 第 {i} 篇", level=1)
+                        doc.add_paragraph()
+                        add_pinyin_to_word(doc, article, words)
+                        
+                        # 转换为字节
+                        word_bytes = io.BytesIO()
+                        doc.save(word_bytes)
+                        word_bytes.seek(0)
+                        
+                        # 缓存 Word 字节
+                        st.session_state.word_cache[word_key] = word_bytes.getvalue()
+                    
+                    # 从缓存取出 Word 数据
+                    word_data = st.session_state.word_cache[word_key]
                     
                     # 下载 Word 文档（带拼音标注）
                     st.download_button(
                         label="📥 下载 Word（带拼音标注）",
-                        data=word_bytes.getvalue(),
+                        data=word_data,
                         file_name=f"HSK{level}_文章{i}_带拼音.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         key=f"btn_word_{i}",
@@ -378,49 +390,56 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
                         
                         mp3_key = f"mp3_{level}_{i}"
                         
+                        # 生成 MP3 的列容器
+                        col_mp3_gen = st.columns([1])[0]
+                        
                         # 检查缓存中是否已有该 MP3
                         if mp3_key not in st.session_state.mp3_cache:
-                            if st.button(f"🎬 生成 MP3 {i}", key=f"generate_mp3_{i}", use_container_width=True):
-                                try:
-                                    progress_placeholder = st.empty()
-                                    progress_placeholder.text(f"🔄 正在生成第 {i} 篇的 MP3 音频...")
-                                    
-                                    # 创建临时文件来存储 MP3
-                                    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
-                                        tmp_path = tmp_file.name
-                                    
-                                    qwen3_tts(article, tmp_path)
-                                    
-                                    # 读取 MP3 文件
-                                    with open(tmp_path, 'rb') as mp3_file:
-                                        mp3_data = mp3_file.read()
-                                    
-                                    # 清理临时文件
-                                    os.unlink(tmp_path)
-                                    
-                                    # 缓存 MP3 数据
-                                    st.session_state.mp3_cache[mp3_key] = mp3_data
-                                    
-                                    progress_placeholder.empty()
-                                    st.rerun()
-                                    
-                                except Exception as e:
-                                    st.error(f"❌ MP3 生成失败：{str(e)}")
-                                    st.info("可能原因：API 密钥无效、网络连接问题或 API 服务不可用")
+                            with col_mp3_gen:
+                                if st.button(f"🎬 生成 MP3 {i}", key=f"generate_mp3_{i}", use_container_width=True):
+                                    try:
+                                        progress_placeholder = st.empty()
+                                        progress_placeholder.text(f"🔄 正在生成第 {i} 篇的 MP3 音频...")
+                                        
+                                        # 创建临时文件来存储 MP3
+                                        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
+                                            tmp_path = tmp_file.name
+                                        
+                                        qwen3_tts(article, tmp_path)
+                                        
+                                        # 读取 MP3 文件
+                                        with open(tmp_path, 'rb') as mp3_file:
+                                            mp3_data = mp3_file.read()
+                                        
+                                        # 清理临时文件
+                                        os.unlink(tmp_path)
+                                        
+                                        # 缓存 MP3 数据
+                                        st.session_state.mp3_cache[mp3_key] = mp3_data
+                                        
+                                        progress_placeholder.empty()
+                                        st.rerun()
+                                        
+                                    except Exception as e:
+                                        st.error(f"❌ MP3 生成失败：{str(e)}")
+                                        st.info("可能原因：API 密钥无效、网络连接问题或 API 服务不可用")
                         
                         # 显示已缓存的 MP3
                         if mp3_key in st.session_state.mp3_cache:
                             mp3_data = st.session_state.mp3_cache[mp3_key]
                             
                             st.audio(mp3_data, format='audio/mp3')
-                            st.download_button(
-                                label=f"📥 下载 MP3 {i}",
-                                data=mp3_data,
-                                file_name=f"HSK{level}_第{i}篇_墨讲师朗读.mp3",
-                                mime="audio/mp3",
-                                key=f"btn_mp3_{i}",
-                                use_container_width=True
-                            )
+                            
+                            col_mp3_down = st.columns([1])[0]
+                            with col_mp3_down:
+                                st.download_button(
+                                    label=f"📥 下载 MP3 {i}",
+                                    data=mp3_data,
+                                    file_name=f"HSK{level}_第{i}篇_墨讲师朗读.mp3",
+                                    mime="audio/mp3",
+                                    key=f"btn_mp3_{i}",
+                                    use_container_width=True
+                                )
         
         except Exception as e:
             st.error(f"❌ 生成失败：{str(e)}")
