@@ -1,0 +1,5 @@
+streamlit==1.28.1
+requests==2.31.0
+python-docx==0.8.11
+xpinyin==0.30.1
+jieba==0.42.1
