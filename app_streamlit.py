@@ -8,6 +8,13 @@ import requests
 import re
 from xpinyin import Pinyin
 import jieba
+import os
+import tempfile
+import io
+from docx import Document
+from docx.shared import Inches, Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 
 # ================== 页面配置 ==================
 st.set_page_config(
@@ -22,8 +29,6 @@ API_KEY = "sk-cad3c95291134e868ca15ade100c1033"
 
 # ================== 初始化 ==================
 pinyin_tool = Pinyin()
-import os
-import tempfile
 
 # HSK标准信息
 HSK_INFO = {
@@ -105,15 +110,13 @@ def qwen3_tts(text, save_path):
     with open(save_path, "wb") as f:
         f.write(audio_resp.content)
 
-# ================== 辅助函数 ==================
-def add_pinyin_to_text(text, red_words):
-    """为文本添加拼音（返回 HTML 格式）"""
+# ================== Word文档生成函数 ==================
+def add_pinyin_to_word(doc, text, red_words):
+    """将文本添加到 Word 文档，拼音在上，汉字在下"""
     chars = list(text)
     max_chars_per_line = 10
     
-    html_output = ""
     i = 0
-    
     while i < len(chars):
         line_chars = []
         for _ in range(max_chars_per_line):
@@ -126,33 +129,47 @@ def add_pinyin_to_text(text, red_words):
         if not line_chars:
             continue
         
-        # 创建表格行
-        html_output += '<table style="border-collapse: collapse; margin: 10px 0; width: 100%;">'
-        html_output += '<tr>'
+        # 创建表格
+        table = doc.add_table(rows=2, cols=len(line_chars))
+        table.style = 'Table Grid'
+        table.allow_autofit = False
+        table.width = Inches(6.5)
         
-        for char in line_chars:
+        for j, char in enumerate(line_chars):
+            table.columns[j].width = Inches(0.55)
+            
+            # 拼音行
+            py_cell = table.cell(0, j)
             if re.match(r'[\u4e00-\u9fff]', char):  # 汉字
                 py = pinyin_tool.get_pinyin(char, tone_marks='marks')
-                is_red = any(char in word for word in red_words)
-                py_color = 'red' if is_red else 'blue'
-                text_color = 'red' if is_red else 'black'
-                
-                html_output += f'''
-                <td style="border: 1px solid #ddd; padding: 8px; text-align: center; width: 50px;">
-                    <div style="color: {py_color}; font-size: 12px; line-height: 1.2;">{py}</div>
-                    <div style="color: {text_color}; font-size: 16px; font-weight: {'bold' if is_red else 'normal'}; font-family: SimSun;">{char}</div>
-                </td>
-                '''
+                py_cell.text = py
+                if py_cell.paragraphs[0].runs:
+                    py_run = py_cell.paragraphs[0].runs[0]
+                    py_run.font.size = Pt(12)
+                    is_red = any(char in word for word in red_words)
+                    py_run.font.color.rgb = RGBColor(255, 0, 0) if is_red else RGBColor(0, 0, 255)
             else:
-                html_output += f'''
-                <td style="border: 1px solid #ddd; padding: 8px; text-align: center; width: 50px;">
-                    <div style="font-size: 16px;">{char}</div>
-                </td>
-                '''
+                py_cell.text = ""
+            
+            py_cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            # 汉字行
+            text_cell = table.cell(1, j)
+            text_cell.text = char
+            p = text_cell.paragraphs[0]
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            if p.runs:
+                run = p.runs[0]
+                run.font.name = 'SimSun'
+                run.font.size = Pt(16)
+                run._element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
+                is_red_word = any(char in word for word in red_words)
+                if is_red_word:
+                    run.font.color.rgb = RGBColor(255, 0, 0)
+                    run.bold = True
         
-        html_output += '</tr></table>'
-    
-    return html_output
+        doc.add_paragraph()
 
 # ================== 侧边栏配置 ==================
 st.sidebar.markdown("## ⚙️ 生成参数")
@@ -333,23 +350,39 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
                     
                     # 如果选择添加拼音
                     if include_pinyin:
-                        st.markdown("**带拼音版本：**")
-                        html_content = add_pinyin_to_text(article, words)
-                        st.markdown(html_content, unsafe_allow_html=True)
+                        # 创建 Word 文档
+                        doc = Document()
+                        doc.add_heading(f"HSK{level} 第 {i} 篇", level=1)
+                        doc.add_paragraph()
+                        add_pinyin_to_word(doc, article, words)
+                        
+                        # 转换为字节
+                        word_bytes = io.BytesIO()
+                        doc.save(word_bytes)
+                        word_bytes.seek(0)
+                        
+                        # 显示下载提示
+                        st.markdown("<small>📄 点击下方按钮下载完整 Word 版本（包含拼音标注）</small>", unsafe_allow_html=True)
+                        st.download_button(
+                            label="📥 下载 Word（带拼音标注）",
+                            data=word_bytes.getvalue(),
+                            file_name=f"HSK{level}_文章{i}_带拼音.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key=f"btn_word_{i}"
+                        )
+                    else:
+                        st.download_button(
+                            label="📥 下载文章（TXT格式）",
+                            data=article,
+                            file_name=f"HSK{level}_文章{i}.txt",
+                            mime="text/plain",
+                            key=f"btn_txt_{i}"
+                        )
                     
-                    # 下载和音频选项
-                    col1, col2, col3 = st.columns(3)
+                    # 词汇分析和音频选项
+                    col1, col2 = st.columns(2)
+                    
                     with col1:
-                        if st.button(f"📥 下载文章 {i} 为 TXT", key=f"download_txt_{i}"):
-                            st.download_button(
-                                label="下载 TXT",
-                                data=article,
-                                file_name=f"HSK{level}_文章{i}.txt",
-                                mime="text/plain",
-                                key=f"btn_txt_{i}"
-                            )
-                    
-                    with col2:
                         if st.button(f"📊 词汇分析 {i}", key=f"analysis_{i}"):
                             # 简单的词汇分析
                             words_in_article = jieba.cut(article)
@@ -364,7 +397,7 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
                             for word, freq in sorted_words:
                                 st.write(f"- {word}: {freq} 次")
                     
-                    with col3:
+                    with col2:
                         if include_mp3:
                             if st.button(f"🎵 生成 MP3 {i}", key=f"generate_mp3_{i}"):
                                 try:
@@ -382,6 +415,23 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
                                         mp3_data = mp3_file.read()
                                     
                                     # 清理临时文件
+                                    os.unlink(tmp_path)
+                                    
+                                    progress_text.empty()
+                                    
+                                    # 显示音频播放器和下载按钮
+                                    st.audio(mp3_data, format='audio/mp3')
+                                    st.download_button(
+                                        label=f"📥 下载 MP3 {i}",
+                                        data=mp3_data,
+                                        file_name=f"HSK{level}_第{i}篇_墨讲师朗读.mp3",
+                                        mime="audio/mp3",
+                                        key=f"btn_mp3_{i}"
+                                    )
+                                    st.success(f"✅ MP3 生成完成！")
+                                except Exception as e:
+                                    st.error(f"❌ MP3 生成失败：{str(e)}")
+                                    st.info("可能原因：API 密钥无效、网络连接问题或 API 服务不可用")                                    # 清理临时文件
                                     os.unlink(tmp_path)
                                     
                                     progress_text.empty()
