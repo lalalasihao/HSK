@@ -37,6 +37,14 @@ if 'mp3_cache' not in st.session_state:
     st.session_state.mp3_cache = {}
 if 'word_cache' not in st.session_state:
     st.session_state.word_cache = {}
+if 'generation_complete' not in st.session_state:
+    st.session_state.generation_complete = False
+if 'current_level' not in st.session_state:
+    st.session_state.current_level = None
+if 'current_words' not in st.session_state:
+    st.session_state.current_words = None
+if 'include_mp3_option' not in st.session_state:
+    st.session_state.include_mp3_option = False
 
 # HSK标准信息
 HSK_INFO = {
@@ -292,6 +300,11 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
         # 处理生词
         words = [w.strip() for w in words_input.replace("\n", " ").split() if w.strip()]
         
+        # 保存当前配置到 session_state
+        st.session_state.current_level = level
+        st.session_state.current_words = words
+        st.session_state.include_mp3_option = include_mp3
+        
         # 创建进度条
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -383,116 +396,121 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
             progress_bar.empty()
             status_text.empty()
             
-            # 缓存生成的文章
+            # 缓存生成的文章和标志
             st.session_state.generated_articles = all_articles
+            st.session_state.generation_complete = True
             
-            # 显示结果
+            # 显示成功消息
             st.success(f"✅ 成功生成 {num_articles} 篇文章！")
             st.divider()
             
-            # 显示生成的文章
-            for i, article in enumerate(st.session_state.generated_articles, 1):
-                with st.expander(f"📖 文章 {i}", expanded=(i==1)):
-                    st.markdown(f"**字数**: {len(article)} 字")
-                    
-                    # 显示原文
-                    st.markdown("**原文：**")
-                    st.info(article)
-                    
-                    # Word 文档缓存 key
-                    word_key = f"word_{level}_{i}"
-                    
-                    # 如果缓存中没有 Word 文档，则生成
-                    if word_key not in st.session_state.word_cache:
-                        doc = Document()
-                        doc.add_heading(f"HSK{level} 第 {i} 篇", level=1)
-                        doc.add_paragraph()
-                        add_pinyin_to_word(doc, article, words)
-                        
-                        # 转换为字节
-                        word_bytes = io.BytesIO()
-                        doc.save(word_bytes)
-                        word_bytes.seek(0)
-                        
-                        # 缓存 Word 字节
-                        st.session_state.word_cache[word_key] = word_bytes.getvalue()
-                    
-                    # 从缓存取出 Word 数据
-                    word_data = st.session_state.word_cache[word_key]
-                    
-                    # 下载 Word 文档（带拼音标注）
-                    st.download_button(
-                        label="📥 下载 Word（带拼音标注）",
-                        data=word_data,
-                        file_name=f"HSK{level}_文章{i}_带拼音.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key=f"btn_word_{i}",
-                        use_container_width=True
-                    )
-                    
-                    # MP3 部分
-                    if include_mp3:
-                        st.markdown("---")
-                        st.markdown("**🎵 MP3 朗读（墨讲师）**")
-                        
-                        mp3_key = f"mp3_{level}_{i}"
-                        
-                        # 生成 MP3 的列容器
-                        col_mp3_gen = st.columns([1])[0]
-                        
-                        # 检查缓存中是否已有该 MP3
-                        if mp3_key not in st.session_state.mp3_cache:
-                            with col_mp3_gen:
-                                if st.button(f"🎬 生成 MP3 {i}", key=f"generate_mp3_{i}", use_container_width=True):
-                                    try:
-                                        progress_placeholder = st.empty()
-                                        progress_placeholder.text(f"🔄 正在生成第 {i} 篇的 MP3 音频...")
-                                        
-                                        # 创建临时文件来存储 MP3
-                                        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
-                                            tmp_path = tmp_file.name
-                                        
-                                        qwen3_tts(article, tmp_path)
-                                        
-                                        # 读取 MP3 文件
-                                        with open(tmp_path, 'rb') as mp3_file:
-                                            mp3_data = mp3_file.read()
-                                        
-                                        # 清理临时文件
-                                        os.unlink(tmp_path)
-                                        
-                                        # 缓存 MP3 数据
-                                        st.session_state.mp3_cache[mp3_key] = mp3_data
-
-                                        # 清理进度占位符并刷新界面以显示音频播放器和下载按钮
-                                        progress_placeholder.empty()
-                                        st.rerun()
-                                        
-                                    except Exception as e:
-                                        st.error(f"❌ MP3 生成失败：{str(e)}")
-                                        st.info("可能原因：API 密钥无效、网络连接问题或 API 服务不可用")
-                        
-                        # 显示已缓存的 MP3/WAV
-                        if mp3_key in st.session_state.mp3_cache:
-                            audio_data = st.session_state.mp3_cache[mp3_key]
-                            
-                            # Streamlit 的 audio 组件支持多种格式
-                            st.audio(audio_data, format='audio/wav')
-                            
-                            col_mp3_down = st.columns([1])[0]
-                            with col_mp3_down:
-                                st.download_button(
-                                    label=f"📥 下载音频 {i}",
-                                    data=audio_data,
-                                    file_name=f"HSK{level}_第{i}篇_墨讲师朗读.wav",
-                                    mime="audio/wav",
-                                    key=f"btn_mp3_{i}",
-                                    use_container_width=True
-                                )
-        
         except Exception as e:
             st.error(f"❌ 生成失败：{str(e)}")
             st.info("可能原因：\n- API 密钥无效\n- 网络连接问题\n- API 服务不可用")
+
+# ================== 显示生成结果（独立于生成按钮） ==================
+# 如果有已生成的文章，显示它们（即使没有再次点击生成按钮）
+if st.session_state.generation_complete and st.session_state.generated_articles:
+    st.divider()
+    st.markdown("### 📖 生成的文章")
+    
+    level = st.session_state.current_level
+    words = st.session_state.current_words
+    include_mp3 = st.session_state.include_mp3_option
+    
+    # 显示生成的文章
+    for i, article in enumerate(st.session_state.generated_articles, 1):
+        with st.expander(f"📖 文章 {i}", expanded=(i==1)):
+            st.markdown(f"**字数**: {len(article)} 字")
+            
+            # 显示原文
+            st.markdown("**原文：**")
+            st.info(article)
+            
+            # Word 文档缓存 key
+            word_key = f"word_{level}_{i}"
+            
+            # 如果缓存中没有 Word 文档，则生成
+            if word_key not in st.session_state.word_cache:
+                doc = Document()
+                doc.add_heading(f"HSK{level} 第 {i} 篇", level=1)
+                doc.add_paragraph()
+                add_pinyin_to_word(doc, article, words)
+                
+                # 转换为字节
+                word_bytes = io.BytesIO()
+                doc.save(word_bytes)
+                word_bytes.seek(0)
+                
+                # 缓存 Word 字节
+                st.session_state.word_cache[word_key] = word_bytes.getvalue()
+            
+            # 从缓存取出 Word 数据
+            word_data = st.session_state.word_cache[word_key]
+            
+            # 下载 Word 文档（带拼音标注）
+            st.download_button(
+                label="📥 下载 Word（带拼音标注）",
+                data=word_data,
+                file_name=f"HSK{level}_文章{i}_带拼音.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key=f"btn_word_{i}",
+                use_container_width=True
+            )
+            
+            # MP3 部分
+            if include_mp3:
+                st.markdown("---")
+                st.markdown("**🎵 MP3 朗读（墨讲师）**")
+                
+                mp3_key = f"mp3_{level}_{i}"
+                
+                # 检查缓存中是否已有该 MP3
+                if mp3_key not in st.session_state.mp3_cache:
+                    # 显示"生成 MP3"按钮
+                    if st.button(f"🎬 生成 MP3 {i}", key=f"generate_mp3_{i}", use_container_width=True):
+                        try:
+                            progress_placeholder = st.empty()
+                            progress_placeholder.text(f"🔄 正在生成第 {i} 篇的 MP3 音频...")
+                            
+                            # 创建临时文件来存储 MP3
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
+                                tmp_path = tmp_file.name
+                            
+                            qwen3_tts(article, tmp_path)
+                            
+                            # 读取 MP3 文件
+                            with open(tmp_path, 'rb') as mp3_file:
+                                mp3_data = mp3_file.read()
+                            
+                            # 清理临时文件
+                            os.unlink(tmp_path)
+                            
+                            # 缓存 MP3 数据（这会自动刷新页面）
+                            st.session_state.mp3_cache[mp3_key] = mp3_data
+                            progress_placeholder.empty()
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"❌ MP3 生成失败：{str(e)}")
+                            st.info("可能原因：API 密钥无效、网络连接问题或 API 服务不可用")
+                else:
+                    # 显示已缓存的 MP3/WAV
+                    audio_data = st.session_state.mp3_cache[mp3_key]
+                    
+                    # 显示音频播放器
+                    st.audio(audio_data, format='audio/wav')
+                    
+                    # 显示下载按钮（不会导致内容消失）
+                    st.download_button(
+                        label=f"📥 下载音频 {i}",
+                        data=audio_data,
+                        file_name=f"HSK{level}_第{i}篇_墨讲师朗读.wav",
+                        mime="audio/wav",
+                        key=f"btn_mp3_{i}",
+                        use_container_width=True
+                    )
+
 
 # ================== 底部信息 ==================
 st.divider()
