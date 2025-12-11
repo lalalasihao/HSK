@@ -30,6 +30,12 @@ API_KEY = "sk-cad3c95291134e868ca15ade100c1033"
 # ================== 初始化 ==================
 pinyin_tool = Pinyin()
 
+# 初始化 session state
+if 'generated_articles' not in st.session_state:
+    st.session_state.generated_articles = []
+if 'mp3_cache' not in st.session_state:
+    st.session_state.mp3_cache = {}
+
 # HSK标准信息
 HSK_INFO = {
     "HSK1": {
@@ -207,7 +213,6 @@ with st.sidebar:
     )
     
     st.markdown("### 🔊 生成选项")
-    include_pinyin = st.checkbox("添加拼音标注", value=True)
     include_mp3 = st.checkbox("生成 MP3 朗读（墨讲师）", value=False)
     
     st.divider()
@@ -228,12 +233,6 @@ with st.sidebar:
 # ================== 主页面 ==================
 st.title("🎓 HSK 智能文章生成器")
 st.markdown("基于通义千问 AI · 专业级 HSK 学习材料生成工具")
-
-# 主要内容区域
-col1, col2 = st.columns([3, 1])
-
-with col1:
-    st.markdown("### 📖 生成结果")
 
 # 生成按钮
 if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
@@ -335,12 +334,15 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
             progress_bar.empty()
             status_text.empty()
             
+            # 缓存生成的文章
+            st.session_state.generated_articles = all_articles
+            
             # 显示结果
             st.success(f"✅ 成功生成 {num_articles} 篇文章！")
             st.divider()
             
             # 显示生成的文章
-            for i, article in enumerate(all_articles, 1):
+            for i, article in enumerate(st.session_state.generated_articles, 1):
                 with st.expander(f"📖 文章 {i}", expanded=(i==1)):
                     st.markdown(f"**字数**: {len(article)} 字")
                     
@@ -348,61 +350,40 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
                     st.markdown("**原文：**")
                     st.info(article)
                     
-                    # 如果选择添加拼音
-                    if include_pinyin:
-                        # 创建 Word 文档
-                        doc = Document()
-                        doc.add_heading(f"HSK{level} 第 {i} 篇", level=1)
-                        doc.add_paragraph()
-                        add_pinyin_to_word(doc, article, words)
+                    # 创建 Word 文档
+                    doc = Document()
+                    doc.add_heading(f"HSK{level} 第 {i} 篇", level=1)
+                    doc.add_paragraph()
+                    add_pinyin_to_word(doc, article, words)
+                    
+                    # 转换为字节
+                    word_bytes = io.BytesIO()
+                    doc.save(word_bytes)
+                    word_bytes.seek(0)
+                    
+                    # 下载 Word 文档（带拼音标注）
+                    st.download_button(
+                        label="📥 下载 Word（带拼音标注）",
+                        data=word_bytes.getvalue(),
+                        file_name=f"HSK{level}_文章{i}_带拼音.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"btn_word_{i}",
+                        use_container_width=True
+                    )
+                    
+                    # MP3 部分
+                    if include_mp3:
+                        st.markdown("---")
+                        st.markdown("**🎵 MP3 朗读（墨讲师）**")
                         
-                        # 转换为字节
-                        word_bytes = io.BytesIO()
-                        doc.save(word_bytes)
-                        word_bytes.seek(0)
+                        mp3_key = f"mp3_{level}_{i}"
                         
-                        # 显示下载提示
-                        st.markdown("<small>📄 点击下方按钮下载完整 Word 版本（包含拼音标注）</small>", unsafe_allow_html=True)
-                        st.download_button(
-                            label="📥 下载 Word（带拼音标注）",
-                            data=word_bytes.getvalue(),
-                            file_name=f"HSK{level}_文章{i}_带拼音.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            key=f"btn_word_{i}"
-                        )
-                    else:
-                        st.download_button(
-                            label="📥 下载文章（TXT格式）",
-                            data=article,
-                            file_name=f"HSK{level}_文章{i}.txt",
-                            mime="text/plain",
-                            key=f"btn_txt_{i}"
-                        )
-                    
-                    # 词汇分析和音频选项
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        if st.button(f"📊 词汇分析 {i}", key=f"analysis_{i}"):
-                            # 简单的词汇分析
-                            words_in_article = jieba.cut(article)
-                            word_freq = {}
-                            for word in words_in_article:
-                                if len(word) > 1:
-                                    word_freq[word] = word_freq.get(word, 0) + 1
-                            
-                            sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]
-                            
-                            st.markdown("**高频词汇 Top 10：**")
-                            for word, freq in sorted_words:
-                                st.write(f"- {word}: {freq} 次")
-                    
-                    with col2:
-                        if include_mp3:
-                            if st.button(f"🎵 生成 MP3 {i}", key=f"generate_mp3_{i}"):
+                        # 检查缓存中是否已有该 MP3
+                        if mp3_key not in st.session_state.mp3_cache:
+                            if st.button(f"🎬 生成 MP3 {i}", key=f"generate_mp3_{i}", use_container_width=True):
                                 try:
-                                    progress_text = st.empty()
-                                    progress_text.text(f"🔄 正在生成第 {i} 篇的 MP3 音频...")
+                                    progress_placeholder = st.empty()
+                                    progress_placeholder.text(f"🔄 正在生成第 {i} 篇的 MP3 音频...")
                                     
                                     # 创建临时文件来存储 MP3
                                     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
@@ -417,38 +398,29 @@ if st.button("🚀 开始生成", key="generate_btn", use_container_width=True):
                                     # 清理临时文件
                                     os.unlink(tmp_path)
                                     
-                                    progress_text.empty()
+                                    # 缓存 MP3 数据
+                                    st.session_state.mp3_cache[mp3_key] = mp3_data
                                     
-                                    # 显示音频播放器和下载按钮
-                                    st.audio(mp3_data, format='audio/mp3')
-                                    st.download_button(
-                                        label=f"📥 下载 MP3 {i}",
-                                        data=mp3_data,
-                                        file_name=f"HSK{level}_第{i}篇_墨讲师朗读.mp3",
-                                        mime="audio/mp3",
-                                        key=f"btn_mp3_{i}"
-                                    )
-                                    st.success(f"✅ MP3 生成完成！")
-                                except Exception as e:
-                                    st.error(f"❌ MP3 生成失败：{str(e)}")
-                                    st.info("可能原因：API 密钥无效、网络连接问题或 API 服务不可用")                                    # 清理临时文件
-                                    os.unlink(tmp_path)
+                                    progress_placeholder.empty()
+                                    st.rerun()
                                     
-                                    progress_text.empty()
-                                    
-                                    # 显示音频播放器和下载按钮
-                                    st.audio(mp3_data, format='audio/mp3')
-                                    st.download_button(
-                                        label=f"📥 下载 MP3 {i}",
-                                        data=mp3_data,
-                                        file_name=f"HSK{level}_第{i}篇_墨讲师朗读.mp3",
-                                        mime="audio/mp3",
-                                        key=f"btn_mp3_{i}"
-                                    )
-                                    st.success(f"✅ MP3 生成完成！")
                                 except Exception as e:
                                     st.error(f"❌ MP3 生成失败：{str(e)}")
                                     st.info("可能原因：API 密钥无效、网络连接问题或 API 服务不可用")
+                        
+                        # 显示已缓存的 MP3
+                        if mp3_key in st.session_state.mp3_cache:
+                            mp3_data = st.session_state.mp3_cache[mp3_key]
+                            
+                            st.audio(mp3_data, format='audio/mp3')
+                            st.download_button(
+                                label=f"📥 下载 MP3 {i}",
+                                data=mp3_data,
+                                file_name=f"HSK{level}_第{i}篇_墨讲师朗读.mp3",
+                                mime="audio/mp3",
+                                key=f"btn_mp3_{i}",
+                                use_container_width=True
+                            )
         
         except Exception as e:
             st.error(f"❌ 生成失败：{str(e)}")
@@ -464,7 +436,7 @@ st.markdown("""
 2. **选择级别** - 根据学习阶段选择 HSK 等级（1-5）
 3. **配置参数** - 调整篇数和字数
 4. **点击生成** - 等待 AI 生成个性化学习材料
-5. **查看结果** - 支持拼音标注、词汇分析、下载等功能
+5. **下载使用** - 支持 Word、TXT、MP3 等多种格式
 
 ### 🎯 功能特点
 
@@ -472,7 +444,7 @@ st.markdown("""
 📖 **多级别支持** - 从 HSK1 到 HSK5
 🔤 **拼音标注** - 一个字一格，清晰易读
 🔴 **生词标记** - 自动标红生词，强化学习
-📥 **灵活下载** - 支持 TXT 格式下载
+📥 **Word 下载** - 带拼音标注的 Word 文档
 🎵 **MP3 朗读** - 墨讲师专业朗读，0.8倍速
 
 ### 💡 技术栈
@@ -483,5 +455,5 @@ st.markdown("""
 - **分词工具** - jieba
 
 ---
-**版本**: 1.0 | **最后更新**: 2025-12-11
+**版本**: 2.0 | **最后更新**: 2025-12-11
 """)
